@@ -19,7 +19,6 @@ export default {
     }
 
     const message = update.message;
-
     if (!message?.text || !message.chat?.id) {
       return new Response("OK");
     }
@@ -31,8 +30,77 @@ export default {
       await sendTelegram(
         env.TELEGRAM_TOKEN,
         chatId,
-        "Привет! Я NexoAI — твой ИИ-помощник. Напиши мне вопрос!"
+        "Привет! Я NexoAI — твой ИИ-помощник. Напиши вопрос или попроси меня нарисовать картинку! 🎨"
       );
+      return new Response("OK");
+    }
+
+    const wantsImage =
+      /нарисуй|нарисовать|сгенерируй|создай картин|создай изображ|сделай фото|сделай картин|сделай изображ|generate image|create image|draw a/i.test(userText);
+
+    if (wantsImage) {
+      try {
+        if (!env.AI) {
+          throw new Error("AI binding is not configured");
+        }
+
+        await sendTelegram(
+          env.TELEGRAM_TOKEN,
+          chatId,
+          "🎨 Создаю изображение. Это может занять немного времени..."
+        );
+
+        const prompt = userText
+          .replace(/^\/image\s*/i, "")
+          .slice(0, 2000);
+
+        const result = await env.AI.run(
+          "@cf/black-forest-labs/flux-1-schnell",
+          {
+            prompt,
+            steps: 4
+          }
+        );
+
+        if (!result?.image) {
+          throw new Error("Image model returned no image");
+        }
+
+        const binary = atob(result.image);
+        const bytes = Uint8Array.from(
+          binary,
+          character => character.charCodeAt(0)
+        );
+
+        const form = new FormData();
+        form.append("chat_id", String(chatId));
+        form.append(
+          "photo",
+          new Blob([bytes], { type: "image/jpeg" }),
+          "nexoai.jpg"
+        );
+        form.append("caption", "✨ Создано с помощью NexoAI");
+
+        const response = await fetch(
+          `https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendPhoto`,
+          {
+            method: "POST",
+            body: form
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Telegram sendPhoto failed");
+        }
+
+      } catch (error) {
+        await sendTelegram(
+          env.TELEGRAM_TOKEN,
+          chatId,
+          "Не удалось создать изображение. Возможно, временно недоступна модель или исчерпана бесплатная квота. Попробуй позже."
+        );
+      }
+
       return new Response("OK");
     }
 
@@ -52,8 +120,7 @@ export default {
             messages: [
               {
                 role: "system",
-                content:
-                  "Ты NexoAI, полезный ИИ-помощник. Отвечай на русском языке, если пользователь пишет по-русски. Объясняй понятно и доброжелательно."
+                content: "Ты NexoAI, полезный ИИ-помощник. Отвечай на русском, если пользователь пишет по-русски. Будь понятным и доброжелательным."
               },
               {
                 role: "user",
@@ -79,11 +146,12 @@ export default {
           ? answer.slice(0, 4000)
           : "Не удалось получить ответ. Попробуй ещё раз."
       );
+
     } catch (error) {
       await sendTelegram(
         env.TELEGRAM_TOKEN,
         chatId,
-        "Не получилось получить ответ от ИИ. Попробуй позже."
+        "Не получилось получить ответ от ИИ. Попробуй ещё раз позже."
       );
     }
 
